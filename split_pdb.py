@@ -8,6 +8,7 @@ Created on Wed Mar 29 12:28:09 2023
 import os
 import MDAnalysis as mda
 from mouse2.lib.aggregation import determine_aggregates
+from mouse2.lib.utilities import names_from_types
 
 def main():
     
@@ -36,6 +37,9 @@ def main():
 
 # Read data
     u = mda.Universe(*args.input)
+
+# Write atom name attribute for pdb
+    names_from_types(u)
 
 # Determine aggregates
     data = determine_aggregates(u, r_neigh = args.r_neigh,
