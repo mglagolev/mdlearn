@@ -32,11 +32,23 @@ def main():
         '--selection', metavar = 'QUERY', type = str, nargs = '?',
         help 
         = "Consider only selected atoms, use MDAnalysis selection language")
+    
+    parser.add_argument(
+        "--remove-pbc-bonds", action = "store_true",
+        help = "Remove the bonds transversing the periodic boundary conditions")
 
     args = parser.parse_args()
 
 # Read data
     u = mda.Universe(*args.input)
+
+# Remove the bonds transversing the PBC, if necessary
+
+    if args.remove_pbc_bonds:
+        minbox = min(u.dimensions) / 2.
+        bonds_to_delete = [
+            bond for bond in u.bonds if bond.length(pbc = False) > minbox]
+        u.delete_bonds(bonds_to_delete)
 
 # Write atom name attribute for pdb
     names_from_types(u)
