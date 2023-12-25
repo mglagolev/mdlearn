@@ -36,6 +36,11 @@ def main():
     parser.add_argument(
         "--remove-pbc-bonds", action = "store_true",
         help = "Remove the bonds transversing the periodic boundary conditions")
+    
+    parser.add_argument(
+        "--bonded-as-neighbors", action = "store_true",
+        help = "Treat bonded atoms as each other neighbors regardless of"
+                + " the distance between them")
 
     args = parser.parse_args()
 
@@ -55,8 +60,8 @@ def main():
 
 # Determine aggregates
     data = determine_aggregates(u, r_neigh = args.r_neigh,
-                                      selection = args.selection,
-                                      ts_indices = [-1])
+                                selection = args.selection, ts_indices = [-1],
+                                bonded_as_neighbors = args.bonded_as_neighbors)
 
     aggregates = list(data["data"].values())[0]
 
