@@ -1,0 +1,27 @@
+{
+  "model_parameters" : {
+    "f" : {
+      "min" : 0.0,
+      "max" : 1.0,
+      "step" : 0.01
+    },
+    "nsplit" : {
+      "min" : 2,
+      "max" : 64,
+      "step" : 1
+    }
+  },
+  "run_parameters" : {
+    "iterations" : 100,
+    "uncertainty_threshold" : 0.01,
+    "sampling_mode" : "MS",
+    "run_template" : "template.lammps",
+    "n_random" : 10,
+    "initial_data" : "initial_sequence.data",
+    "n_steps" : 13,
+    "actions" : "{ 0: 'break', 1 : 'continue', 2 : 'break' }",
+    "run_options" : "--mode 2gpu --nproc 2",
+    "r_neigh_aggregation" : 1.2
+  }
+}
+    
