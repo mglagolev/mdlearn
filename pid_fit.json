@@ -1,0 +1,23 @@
+{
+    "run_parameters": {
+        "run_filename_template": "run_",
+        "in_filename_template" : "in_",
+        "out_filename_template" : "out_",
+        "template_filename": "template.lammps",
+        "run_command" : "/mnt/share/glagolev/run_online.py --mode gpu --nproc 1",
+        "iterations": 1000,
+    },
+    "model_parameters": {
+        "EPS": {
+            "output" : "e_pair",
+            "output_args" : {
+                "file" : "e_pair.dat"
+            },
+            "initial" : 0.8,
+            "setpoint" : 0,
+            "p" : 1,
+            "i" : 2,
+            "d" : 4,
+        }
+    }
+}
