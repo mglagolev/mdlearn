@@ -115,8 +115,10 @@ def objective(trial: optuna.Trial, config):
             
             
         log_file_name = f"trial_{trial.number}.log"
+        output_file_name = f"out_{trial.number}.data"
 
-        script_changes.append(("LOGNAME", log_file_name))
+        script_changes.append(("LOG", log_file_name))
+        script_changes.append(("OUTPUT", output_file_name))
         script_changes.append(("NTRIAL", str(trial.number)))
 
 
@@ -128,7 +130,7 @@ def objective(trial: optuna.Trial, config):
         command = f"/mnt/share/glagolev/run_online.py --input {run_filename} {' '.join(args)}"
 
         exit_code = os.system(command)
-        output_exists = os.path.isfile(f'out_{trial.number}.data')
+        output_exists = os.path.isfile(output_file_name)
         if output_exists:
             good = True
             neighbor_count = builds_reader(log_file_name)
