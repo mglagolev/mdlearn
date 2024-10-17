@@ -3,7 +3,8 @@
         "run_filename_template": "run_",
         "template_filename": "template.lammps",
         "iterations": 1000,
-        "sampler": "TPE"
+        "sampler": "TPE",
+        "log" : "trials.xlsx"
     },
     "model_parameters": {
         "mode": {

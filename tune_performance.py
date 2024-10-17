@@ -8,9 +8,7 @@ import pandas as pd
 import argparse
 import json
 
-import pdb
 
-results_filename = 'research_progress.txt'
 trials = []
 trials_file = "trials.csv"
 
@@ -122,6 +120,7 @@ def objective(trial: optuna.Trial, config):
         script_changes.append(("NTRIAL", str(trial.number)))
 
 
+        trials_file = config["opt_parameters"]["log"]
         template = config["opt_parameters"]["template_filename"]
         run_filename_template = config["opt_parameters"]["run_filename_template"]
         run_filename = f"{run_filename_template}{trial.number}.lammps"
@@ -164,7 +163,12 @@ def objective(trial: optuna.Trial, config):
         trials.append(trial_data)
         trials_df = pd.DataFrame.from_records(trials)
         
-        trials_df.to_csv(trials_file)
+        if trials_file[:4] == ".csv":
+            trials_df.to_csv(trials_file)
+        elif trials_file[:4] == ".xls":
+            trials_df.to_excel(trials_file)
+        elif trials_file[:5] == ".xlsx":
+            trials_df.to_excel(trials_file)
 
         return performance
 
