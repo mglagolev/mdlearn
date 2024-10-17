@@ -259,8 +259,10 @@ if __name__ == "__main__":
         from matplotlib import pyplot as plt
         from matplotlib.colors import ListedColormap
         import seaborn as sns
-        uc_features, points, distributions = fit_model(model_parameters, samples_df,
-                                               mode = uc_sampling_mode)
+        points, labels = create_points(model_parameters, samples_df)
+        uc_features, points, distributions = fit_model(model_parameters,
+                                                       points, labels,
+                                                       mode = uc_sampling_mode)
         plot_uncertainties(model_parameters, uc_features)
         plot_distributions(model_parameters, points, distributions)
 
