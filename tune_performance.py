@@ -163,12 +163,14 @@ def objective(trial: optuna.Trial, config):
         trials.append(trial_data)
         trials_df = pd.DataFrame.from_records(trials)
         
-        if trials_file[:4] == ".csv":
+        if trials_file[-4:] == ".csv":
             trials_df.to_csv(trials_file)
-        elif trials_file[:4] == ".xls":
+        elif trials_file[-4:] == ".xls":
             trials_df.to_excel(trials_file)
-        elif trials_file[:5] == ".xlsx":
+        elif trials_file[-5:] == ".xlsx":
             trials_df.to_excel(trials_file)
+        else:
+            raise NameError("Unknown log file format")
 
         return performance
 
