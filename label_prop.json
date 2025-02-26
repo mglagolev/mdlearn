@@ -1,6 +1,6 @@
 {
   "model_parameters" : {
-    "f" : {
+    "fmod" : {
       "min" : 0.0,
       "max" : 1.0,
       "step" : 0.01
@@ -9,15 +9,21 @@
       "min" : 2,
       "max" : 64,
       "step" : 1
+    },
+    "logN" : {
+      "min" : 7,
+      "max" : 10,
+      "step" : 1
     }
   },
+  "points_file" : "points.xlsx",
   "run_parameters" : {
     "iterations" : 100,
     "uncertainty_threshold" : 0.01,
     "sampling_mode" : "MS",
     "run_template" : "template.lammps",
     "n_random" : 10,
-    "initial_data" : "initial_sequence.data",
+    "initial_data" : "initial_sequence_N2tologN.data",
     "n_steps" : 13,
     "actions" : "{ 0: 'break', 1 : 'continue', 2 : 'break' }",
     "run_options" : "--mode 2gpu --nproc 2",
