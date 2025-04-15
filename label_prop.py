@@ -8,13 +8,18 @@ This is a temporary script file.
 
 import pandas as pd
 import numpy as np
-from sklearn.semi_supervised import LabelPropagation, LabelSpreading
+from sklearn.semi_supervised import LabelSpreading
 import random
 import os
 import argparse
 import json
 import itertools
-from diagram_viz import plot_uncertainties, plot_distributions
+#from diagram_viz import plot_uncertainties, plot_distributions
+import MDAnalysis as mda
+try:
+    from mouse2.mouse2.lib.aggregation import determine_aggregates
+except ModuleNotFoundError:
+    from mouse2.lib.aggregation import determine_aggregates
 
 # Function definitions
 
@@ -210,20 +215,51 @@ def fit_model(parameters, points, labels, mode = None):
     label_prop.fit(normalized_points, labels)
 
     distributions = label_prop.label_distributions_
+    
+    converged_features, converged_distributions = converge_points(
+                                                    points,
+                                                    distributions)
 
-    uc = uncertainties(distributions, mode = mode)
+    uc = uncertainties(converged_distributions, mode = mode)
 
-    uc_features = list(zip(uc, points))
+    uc_features = list(zip(uc, converged_features))
 
     uc_features.sort(key = lambda k: k[0])
     
     return uc_features, points, distributions
 
 
-def choose_random_unprobed(points, labels):
+def converge_points(features, label_distributions):
+    """Converge the the different samples with identical features into one
+        with the correspoinding label distribution"""
+    nsamples = len(features)
+    factors = np.full(nsamples, 1)
+    if len(label_distributions) != nsamples:
+        raise NameError(
+            "features and label distributions dimensions do not match")
+    for i in range(nsamples):
+        for j in range(i):
+            if features[j] == features[i] and factors[j] != 0:
+                label_distributions[j] = np.sum(label_distributions[j],
+                                                label_distributions[i])
+                factors[i] -= 1
+                factors[j] += 1
+    converged_features, converged_label_distributions = [], []
+    for i in range(nsamples):
+        if factors[i] > 0:
+            converged_features.append(features[i])
+            converged_label_distributions.append(label_distributions[i]
+                                                 /factors[i])
+    return converged_features, converged_label_distributions
+
+
+def choose_random_prefer_unprobed(points, labels):
     points_labels = zip(points, labels)
     unprobed_points = [p_l[0] for p_l in points_labels if p_l[1] == -1]
-    return random.choice(unprobed_points)
+    if len(unprobed_points) > 0:
+        return random.choice(unprobed_points)
+    else:
+        return random.choice(points)
 
 
 def choose_parameters(config, samples_df):
@@ -235,12 +271,14 @@ def choose_parameters(config, samples_df):
     
     if p_mode == "points":
         points_file = config["points_file"]
+    else:
+        points_file = None
     
     points, labels = create_points(parameters, samples_df, p_mode = p_mode,
                                    points_file = points_file)
-    
+
     if samples_df.shape[0] > config["run_parameters"]["n_random"]:
-    
+
         uc_features, _, _ = fit_model(parameters, points, labels, mode = mode)
 
         uc_delta = uc_features[-1][0] - uc_features[0][0]
@@ -249,31 +287,117 @@ def choose_parameters(config, samples_df):
             return uc_features[-1][1], mode
         else:
             mode = "random"
-            return choose_random_unprobed(points,labels), mode
-            #return uc_features[random.randrange(0,len(uc_features))][1]
+            return choose_random_prefer_unprobed(points,labels), mode
     else:
         mode = "random"
-        return choose_random_unprobed(points, labels), mode
+        return choose_random_prefer_unprobed(points, labels), mode
+
+
+def run_simulation(simulation):
+    from microplastic.modify_seq import prepare_sample
+    i_iter = simulation["sample"]
+    rp = simulation["config"]["run_parameters"]
+    try:
+        simulation_type = rp["simulation_type"]
+    except KeyError:
+        simulation_type = "standard"
+    for i_step in range(1, rp["n_steps"] + 1):
+        if i_step == 1:
+            try:
+                run_template = rp["initial_run_template"]
+            except KeyError:
+                run_template = rp["run_template"]
+        else:
+            run_template = rp["run_template"]
+        run_filename = f"run_{i_iter}.{i_step}.lammps"
+        infile_name = f"in_{i_iter}.{i_step}.data"
+        prev_outfile_name = f"out_{i_iter}.{i_step-1}.data"
+        outfile_name = f"out_{i_iter}.{i_step}.data"
+        logfile_name = f"{i_iter}.{i_step}.log"
+        xdata_name = f"xdata.{i_iter}.{i_step}.lammps"
+        dump_name = f"atoms.{i_iter}.{i_step}.lammpsdump"
+        substitute_values(run_template, run_filename,
+                          [["INPUT", infile_name],
+                           ["OUTPUT", outfile_name],
+                           ["LOG", logfile_name],
+                           ["XDATA", xdata_name],
+                           ["DUMP", dump_name]
+                           ])
+        if i_step == 1:
+            u = prepare_sample(simulation)
+            if simulation_type == "dpd":
+                u.atoms.write("system_pre.data")
+                substitute_values("system_pre.data", "system.data",
+                                  [["""1 1.000000
+2 1.000000""", """1 1.000000 # C
+2 1.000000 # O"""]])
+                os.system("./mesoconstructor.exe")
+                os.system(f"mv system_lmp.dpd {infile_name}")
+            else:
+                u.atoms.write(infile_name)
+            simulation["step"] = 1
+        else:
+            os.system(f"cp -a {prev_outfile_name} {infile_name}")
+            simulation["step"] += 1
+        if rp["run_mode"] == "module":
+            from lammps import lammps
+            lmp = lammps()
+            lmp.file(run_filename)
+        elif rp["run_mode"] == "standalone":
+            run_options = rp["run_options"]
+            command = "/mnt/share/glagolev/run_online.py " \
+                    + f"--input {run_filename} {run_options}"
+            exit_code = os.system(command)
+    # Process the simulation data: determine the aggregation number
+        output_exists = os.path.isfile(outfile_name)
+        dump_exists = os.path.isfile(dump_name)
+        actions = eval(rp["actions"])
+        if output_exists:
+            if dump_exists:
+                if simulation_type == "dpd":
+                    u = mda.Universe("system.data", dump_name)
+                else:
+                    u = mda.Universe(outfile_name, dump_name)
+            else:
+                u = mda.Universe(outfile_name)
+            simulation["state"], _ = label(simulation, u)
+        else:
+            simulation["state"] = 0
+        if actions[simulation["state"]] == "break":
+            break
 
 
 def label(simulation, u):
-    r_neigh_aggregation = simulation["run_parameters"]["r_neigh_aggregation"]
+    r_neigh_aggregation = simulation["config"]["run_parameters"]["r_neigh_aggregation"]
     aggregates_dict = determine_aggregates(u, r_neigh = r_neigh_aggregation)
-    aggregates_list = aggregates_dict["data"][list(aggregates_dict["data"].keys())[0]]
-    if len(aggregates_list) == 1:
-        return 1
-    elif len(aggregates_list) > 1:
-        return 2
-    else:
-        raise NameError(f"Aggregates list length is {len(aggregates_list)}")
+    aggregates_data = aggregates_dict["data"]
+    timesteps = list(aggregates_data.keys())
+    for timestep in timesteps:
+        n_aggregates = len(aggregates_data[timestep])
+        if n_aggregates > 1:
+            return 2, timestep
+    return 1, None
+
+
+def update_dataframe(dataframe, simulation):
+    simulation_record = {}
+    simulation_record["sample"] = simulation["sample"]
+    simulation_record["choice"] = simulation["choice"]
+    for parameter in simulation["trial_parameters"]:
+        simulation_record[parameter] = simulation["trial_parameters"]\
+                                                    [parameter]
+    simulation_record["step"] = simulation["step"]
+    simulation_record["state"] = simulation["state"]
+    new_dataframe = pd.DataFrame(simulation_record, index = [0])
+    updated_dataframe = pd.concat([dataframe, new_dataframe],
+                                  ignore_index = True)
+    updated_dataframe.reset_index()
+    return updated_dataframe
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description = 'Build a phase diagram')
-
-    #parser.add_argument('--samples', metavar = 'XLS', type = str, nargs = 1,
-    #    help = 'file with datapoints')
 
     parser.add_argument('--config', metavar = 'JSON', type = str, nargs = 1,
         help = 'configuration file')
@@ -304,78 +428,23 @@ if __name__ == "__main__":
 """
 
     if True:
-        import MDAnalysis as mda
-        try:
-            from mouse2.mouse2.lib.aggregation import determine_aggregates
-        except ModuleNotFoundError:
-            from mouse2.lib.aggregation import determine_aggregates
         #from microplastic.modify_seq import modify_seq
-        from microplastic.modify_seq import prepare_sample
         from parzen_search import substitute_values
         # Main loop
         for i_iter in range(samples_df.shape[0] + 1, rp["iterations"] + 1):
             # Fit the model and choose simulation parameters
-            run_parameters, choice_mode = choose_parameters(config, samples_df)
-            # Dump the model data
-
+            trial_parameters, choice_mode = choose_parameters(config, samples_df)
             # Create the simulation dict object with all the attributes stored
             simulation = {}
             simulation["sample"] = i_iter
             simulation["choice"] = choice_mode
             simulation["config"] = config
+            simulation["trial_parameters"] = {}
             for i_param in range(len(p_names)):
-                simulation[p_names[i_param]] = run_parameters[i_param]
-            #simulation[p_names[0]] = run_parameters[0]
-            #simulation[p_names[1]] = run_parameters[1]
+                simulation["trial_parameters"][p_names[i_param]] \
+                = trial_parameters[i_param]
             # Run the simulation
-            for i_step in range(1, rp["n_steps"] + 1):
-                run_filename = f"run_{i_iter}.{i_step}.lammps"
-                infile_name = f"in_{i_iter}.{i_step}.data"
-                prev_outfile_name = f"out_{i_iter}.{i_step-1}.data"
-                outfile_name = f"out_{i_iter}.{i_step}.data"
-                logfile_name = f"{i_iter}.{i_step}.log"
-                xdata_name = f"xdata.{i_iter}.{i_step}.lammps"
-                dump_name = f"atoms.{i_iter}.{i_step}.lammpsdump"
-                substitute_values(rp["run_template"], run_filename,
-                                  [["INPUT", infile_name],
-                                   ["OUTPUT", outfile_name],
-                                   ["LOG", logfile_name],
-                                   ["XDATA", xdata_name],
-                                   ["DUMP", dump_name]
-                                   ])
-                if i_step == 1:
-                    #u = mda.Universe(initial_sequence_file)
-                    u = prepare_sample(simulation)
-                    #modify_seq(u, prob = simulation["f"],
-                    #           nsplit = simulation["nsplit"])
-                    u.atoms.write(infile_name)
-                    simulation["step"] = 1
-                else:
-                    os.system(f"cp -a {prev_outfile_name} {infile_name}")
-                    simulation["step"] += 1
-                if rp["run_mode"] == "module":
-                    from lammps import lammps
-                    lmp = lammps()
-                    lmp.file(run_filename)
-                elif rp["run_mode"] == "standalone":
-                    run_options = rp["run_options"]
-                    command = "/mnt/share/glagolev/run_online.py " \
-                            + f"--input {run_filename} {run_options}"
-                    exit_code = os.system(command)
-            # Process the simulation data: determine the aggregation number
-                output_exists = os.path.isfile(outfile_name)
-                actions = eval(rp["actions"])
-                if output_exists:
-                    u = mda.Universe(outfile_name)
-                    simulation["state"] = label(simulation, u)
-                else:
-                    simulation["state"] = 0
-                if actions[simulation["state"]] == "break":
-                    break
+            run_simulation(simulation)
             # Update the dataframe
-            simulation.pop("config")
-            new_df = pd.DataFrame(simulation, index = [0])
-            updated_df = pd.concat([samples_df, new_df], ignore_index = True)
-            updated_df.reset_index()
-            updated_df.to_excel(rp["samples_output"])
-            samples_df = updated_df
+            samples_df = update_dataframe(samples_df, simulation)
+            samples_df.to_excel(rp["samples_output"])
