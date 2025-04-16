@@ -14,7 +14,6 @@ import os
 import argparse
 import json
 import itertools
-#from diagram_viz import plot_uncertainties, plot_distributions
 import MDAnalysis as mda
 try:
     from mouse2.mouse2.lib.aggregation import determine_aggregates
@@ -87,10 +86,6 @@ def restore(parameter, value):
         return parameter["min"] + value * (parameter["max"] - parameter["min"])
     else:
         return value
-
-
-#def nvalues(parameter):
-#    return int((parameter["max"] - parameter["min"]) / parameter["step"]) + 1
 
 
 def create_grid(parameters, mode = 'itertools'):
@@ -368,7 +363,8 @@ def run_simulation(simulation):
 
 
 def label(simulation, u):
-    r_neigh_aggregation = simulation["config"]["run_parameters"]["r_neigh_aggregation"]
+    r_neigh_aggregation = simulation["config"]["run_parameters"]\
+                                    ["r_neigh_aggregation"]
     aggregates_dict = determine_aggregates(u, r_neigh = r_neigh_aggregation)
     aggregates_data = aggregates_dict["data"]
     timesteps = list(aggregates_data.keys())
@@ -376,7 +372,7 @@ def label(simulation, u):
         n_aggregates = len(aggregates_data[timestep])
         if n_aggregates > 1:
             return 2, timestep
-    return 1, None
+    return 1, timesteps[-1]
 
 
 def update_dataframe(dataframe, simulation):
@@ -414,18 +410,7 @@ if __name__ == "__main__":
     p_names = parameter_ordered_names(mp)
 
     samples_df = pd.read_excel(rp["samples_input"])
-    
-    """if args.plot:
-        from matplotlib import pyplot as plt
-        from matplotlib.colors import ListedColormap
-        import seaborn as sns
-        points, labels = create_points(model_parameters, samples_df)
-        uc_features, points, distributions = fit_model(model_parameters,
-                                                       points, labels,
-                                                       mode = rp["sampling_mode"])
-        plot_uncertainties(model_parameters, uc_features)
-        plot_distributions(model_parameters, points, distributions, samples_file = samples_in_filename)
-"""
+
 
     if True:
         #from microplastic.modify_seq import modify_seq
