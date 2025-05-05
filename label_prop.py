@@ -19,6 +19,7 @@ try:
     from mouse2.mouse2.lib.aggregation import determine_aggregates
 except ModuleNotFoundError:
     from mouse2.lib.aggregation import determine_aggregates
+import pdb
 
 # Function definitions
 
@@ -138,6 +139,38 @@ def create_points(parameters, samples_df, p_mode = "grid", points_file = None,
     return points, labels
 
 
+def create_points2(parameters, samples_df, p_mode = "grid", points_file = None,
+                   return_unprobed = True):
+    #Read parameter columns from dataframe
+    p_names = parameter_ordered_names(parameters)
+    transposed_points = []
+    for p_name in p_names:
+        transposed_points.append(samples_df[p_name])
+    points = np.transpose(transposed_points)
+    labels = list(samples_df["state"])
+    #Create grid
+    if p_mode == "grid":
+        points_to_check = create_grid(parameters)
+    elif p_mode == "file":
+        _, points_to_check = read_points(points_file)
+    else:
+        raise NameError(f"Unsupported point mode {p_mode}")
+    #If point from grid is not in parameters, add it
+    #pdb.set_trace()
+    if return_unprobed:
+        for point in points_to_check:
+            #if point not in points:
+            if not any(np.equal(points,point).all(1)):
+                #pdb.set_trace()
+                if points.shape[0] == 0:
+                    points = np.array([point])
+                    labels.append(-1)
+                else:
+                    points = np.concatenate((points, [point]))
+                    labels.append(-1)
+    #pdb.set_trace()
+    return points, labels
+
 def normalize_points(parameters, points):
     p_names = parameter_ordered_names(parameters)
     normalized_points = []
@@ -211,13 +244,15 @@ def fit_model(parameters, points, labels, mode = None):
 
     distributions = label_prop.label_distributions_
     
-    converged_features, converged_distributions = converge_points(
+    converged_features, converged_distributions, nsamples = converge_points(
                                                     points,
                                                     distributions)
 
     uc = uncertainties(converged_distributions, mode = mode)
+    
+    uc_normalized = [uc_ns[0] / uc_ns[1] for uc_ns in list(zip(uc, nsamples))]
 
-    uc_features = list(zip(uc, converged_features))
+    uc_features = list(zip(uc_normalized, converged_features))
 
     uc_features.sort(key = lambda k: k[0])
     
@@ -234,18 +269,21 @@ def converge_points(features, label_distributions):
             "features and label distributions dimensions do not match")
     for i in range(nsamples):
         for j in range(i):
-            if features[j] == features[i] and factors[j] != 0:
-                label_distributions[j] = np.sum(label_distributions[j],
+            if np.array_equal(features[j],features[i]) and factors[j] != 0:
+                label_distributions[j] = np.add(label_distributions[j],
                                                 label_distributions[i])
                 factors[i] -= 1
                 factors[j] += 1
-    converged_features, converged_label_distributions = [], []
+    converged_features, converged_label_distributions, converged_factors\
+                                                                = [], [], []
+    #pdb.set_trace()
     for i in range(nsamples):
         if factors[i] > 0:
             converged_features.append(features[i])
             converged_label_distributions.append(label_distributions[i]
                                                  /factors[i])
-    return converged_features, converged_label_distributions
+            converged_factors.append(factors[i])
+    return converged_features, converged_label_distributions, converged_factors
 
 
 def choose_random_prefer_unprobed(points, labels):
@@ -269,7 +307,7 @@ def choose_parameters(config, samples_df):
     else:
         points_file = None
     
-    points, labels = create_points(parameters, samples_df, p_mode = p_mode,
+    points, labels = create_points2(parameters, samples_df, p_mode = p_mode,
                                    points_file = points_file)
 
     if samples_df.shape[0] > config["run_parameters"]["n_random"]:
@@ -277,15 +315,18 @@ def choose_parameters(config, samples_df):
         uc_features, _, _ = fit_model(parameters, points, labels, mode = mode)
 
         uc_delta = uc_features[-1][0] - uc_features[0][0]
+        
+        max_uc = uc_features[-1][0]
 
         if uc_delta > uc_threshold:
-            return uc_features[-1][1], mode
+            return uc_features[-1][1], mode, max_uc
         else:
             mode = "random"
-            return choose_random_prefer_unprobed(points,labels), mode
+            return choose_random_prefer_unprobed(points,labels), mode, max_uc
     else:
         mode = "random"
-        return choose_random_prefer_unprobed(points, labels), mode
+        max_uc = "N/A"
+        return choose_random_prefer_unprobed(points, labels), mode, max_uc
 
 
 def run_simulation(simulation):
@@ -316,7 +357,8 @@ def run_simulation(simulation):
                            ["OUTPUT", outfile_name],
                            ["LOG", logfile_name],
                            ["XDATA", xdata_name],
-                           ["DUMP", dump_name]
+                           ["DUMP", dump_name],
+                           ["RANDOM", f"{random.randint(1,100000)}"],
                            ])
         if i_step == 1:
             u = prepare_sample(simulation)
@@ -339,9 +381,8 @@ def run_simulation(simulation):
             lmp = lammps()
             lmp.file(run_filename)
         elif rp["run_mode"] == "standalone":
-            run_options = rp["run_options"]
-            command = "/mnt/share/glagolev/run_online.py " \
-                    + f"--input {run_filename} {run_options}"
+            run_command = rp["run_command"]
+            command = f"{run_command} --input {run_filename}"
             exit_code = os.system(command)
     # Process the simulation data: determine the aggregation number
         output_exists = os.path.isfile(outfile_name)
@@ -355,7 +396,7 @@ def run_simulation(simulation):
                     u = mda.Universe(outfile_name, dump_name)
             else:
                 u = mda.Universe(outfile_name)
-            simulation["state"], _ = label(simulation, u)
+            simulation["state"], simulation["dump_frame"] = label(simulation, u)
         else:
             simulation["state"] = 0
         if actions[simulation["state"]] == "break":
@@ -368,11 +409,11 @@ def label(simulation, u):
     aggregates_dict = determine_aggregates(u, r_neigh = r_neigh_aggregation)
     aggregates_data = aggregates_dict["data"]
     timesteps = list(aggregates_data.keys())
-    for timestep in timesteps:
-        n_aggregates = len(aggregates_data[timestep])
+    for i_ts in range(len(timesteps)):
+        n_aggregates = len(aggregates_data[timesteps[i_ts]])
         if n_aggregates > 1:
-            return 2, timestep
-    return 1, timesteps[-1]
+            return 2, i_ts
+    return 1, len(timesteps)
 
 
 def update_dataframe(dataframe, simulation):
@@ -384,6 +425,11 @@ def update_dataframe(dataframe, simulation):
                                                     [parameter]
     simulation_record["step"] = simulation["step"]
     simulation_record["state"] = simulation["state"]
+    simulation_record["uncertainty"] = simulation["uncertainty"]
+    try:
+        simulation_record["dump_frame"] = simulation["dump_frame"]
+    except KeyError:
+        pass
     new_dataframe = pd.DataFrame(simulation_record, index = [0])
     updated_dataframe = pd.concat([dataframe, new_dataframe],
                                   ignore_index = True)
@@ -418,11 +464,14 @@ if __name__ == "__main__":
         # Main loop
         for i_iter in range(samples_df.shape[0] + 1, rp["iterations"] + 1):
             # Fit the model and choose simulation parameters
-            trial_parameters, choice_mode = choose_parameters(config, samples_df)
+            trial_parameters, choice_mode, uc = choose_parameters(config,
+                                                                  samples_df)
+            #pdb.set_trace()
             # Create the simulation dict object with all the attributes stored
             simulation = {}
             simulation["sample"] = i_iter
             simulation["choice"] = choice_mode
+            simulation["uncertainty"] = uc
             simulation["config"] = config
             simulation["trial_parameters"] = {}
             for i_param in range(len(p_names)):
