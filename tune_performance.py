@@ -120,13 +120,14 @@ def objective(trial: optuna.Trial, config):
         script_changes.append(("NTRIAL", str(trial.number)))
 
 
+        executable = config["opt_parameters"]["executable"]
         trials_file = config["opt_parameters"]["log"]
         template = config["opt_parameters"]["template_filename"]
         run_filename_template = config["opt_parameters"]["run_filename_template"]
         run_filename = f"{run_filename_template}{trial.number}.lammps"
         substitute_values(template,run_filename,script_changes)
         
-        command = f"/mnt/share/glagolev/run_online.py --input {run_filename} {' '.join(args)}"
+        command = f"{executable} --input {run_filename} {' '.join(args)}"
 
         exit_code = os.system(command)
         output_exists = os.path.isfile(output_file_name)
