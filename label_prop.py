@@ -319,14 +319,18 @@ def choose_parameters(config, samples_df):
         max_uc = uc_features[-1][0]
 
         if uc_delta > uc_threshold:
-            return uc_features[-1][1], mode, max_uc
+            top_list_length = config["run_parameters"].get(
+                                    "randomize_top_points", 1)
+            top_list_length = min(top_list_length, len(uc_features))
+            i_point = -1 * random.randint(1, top_list_length)
+            return uc_features[i_point][1], mode, max_uc, i_point
         else:
             mode = "random"
-            return choose_random_prefer_unprobed(points,labels), mode, max_uc
+            return choose_random_prefer_unprobed(points,labels), mode, max_uc, 0
     else:
         mode = "random"
         max_uc = "N/A"
-        return choose_random_prefer_unprobed(points, labels), mode, max_uc
+        return choose_random_prefer_unprobed(points, labels), mode, max_uc, 0
 
 
 def run_simulation(simulation):
@@ -420,16 +424,17 @@ def update_dataframe(dataframe, simulation):
     simulation_record = {}
     simulation_record["sample"] = simulation["sample"]
     simulation_record["choice"] = simulation["choice"]
+    simulation_record["i_point"] = simulation.get("i_point", "n/a")
     for parameter in simulation["trial_parameters"]:
         simulation_record[parameter] = simulation["trial_parameters"]\
                                                     [parameter]
     simulation_record["step"] = simulation["step"]
     simulation_record["state"] = simulation["state"]
     simulation_record["uncertainty"] = simulation["uncertainty"]
-    try:
-        simulation_record["dump_frame"] = simulation["dump_frame"]
-    except KeyError:
-        pass
+    simulation_record["dump_frame"] = simulation.get("dump_frame", "n/a")
+    simulation_record["initial_data"] = simulation.get(
+                                        "initial_data", "n/a")
+    simulation_record["study"] = simulation.get("study", "n/a")
     new_dataframe = pd.DataFrame(simulation_record, index = [0])
     updated_dataframe = pd.concat([dataframe, new_dataframe],
                                   ignore_index = True)
@@ -464,14 +469,16 @@ if __name__ == "__main__":
         # Main loop
         for i_iter in range(samples_df.shape[0] + 1, rp["iterations"] + 1):
             # Fit the model and choose simulation parameters
-            trial_parameters, choice_mode, uc = choose_parameters(config,
-                                                                  samples_df)
+            trial_parameters, choice_mode, uc, i_point = choose_parameters(
+                                                             config,samples_df)
             #pdb.set_trace()
             # Create the simulation dict object with all the attributes stored
             simulation = {}
+            simulation["study"] = rp.get("study", "n/a")
             simulation["sample"] = i_iter
             simulation["choice"] = choice_mode
             simulation["uncertainty"] = uc
+            simulation["i_point"] = i_point
             simulation["config"] = config
             simulation["trial_parameters"] = {}
             for i_param in range(len(p_names)):
