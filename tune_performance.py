@@ -182,7 +182,7 @@ def objective(trial: optuna.Trial, config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description = "Model Parameters")
-    parser.add_argument("config", metavar = "JSON", type = str, nargs = '?',
+    parser.add_argument("--config", metavar = "JSON", type = str, nargs = '?',
     			default = "config.json", help = "study configuration file")
     args = parser.parse_args()
     
@@ -210,4 +210,3 @@ if __name__ == "__main__":
             print("    {}: {}".format(key, value))
 
         study.trials_dataframe().to_csv('study.csv')
-
