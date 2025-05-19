@@ -11,6 +11,8 @@ import numpy as np
 from sklearn.semi_supervised import LabelSpreading
 import random
 import os
+import time
+import socket
 import argparse
 import json
 import itertools
@@ -20,6 +22,12 @@ try:
 except ModuleNotFoundError:
     from mouse2.lib.aggregation import determine_aggregates
 import pdb
+
+MAX_UPDATE_ATTEMPTS = 10
+SHORT_SLEEP = 1.0
+LONG_SLEEP = 3.0
+RECORD_PARAMETERS = ["sample", "choice", "i_point", "step", "state",
+                         "uncertainty", "dump_frame", "initial_data", "study"]
 
 # Function definitions
 
@@ -420,24 +428,100 @@ def label(simulation, u):
     return 1, len(timesteps)
 
 
-def update_dataframe(dataframe, simulation):
-    simulation_record = {}
-    simulation_record["sample"] = simulation["sample"]
-    simulation_record["choice"] = simulation["choice"]
-    simulation_record["i_point"] = simulation.get("i_point", "n/a")
-    for parameter in simulation["trial_parameters"]:
-        simulation_record[parameter] = simulation["trial_parameters"]\
-                                                    [parameter]
-    simulation_record["step"] = simulation["step"]
-    simulation_record["state"] = simulation["state"]
-    simulation_record["uncertainty"] = simulation["uncertainty"]
-    simulation_record["dump_frame"] = simulation.get("dump_frame", "n/a")
-    simulation_record["initial_data"] = simulation.get(
-                                        "initial_data", "n/a")
-    simulation_record["study"] = simulation.get("study", "n/a")
+def concurrent_update(filename, simulation):
+
+    process_id = f"{socket.gethostname()}_{os.getpid()}"
+    filename_noext, extension = os.path.splitext(filename)
+    lock_filename = filename_noext + ".lock"
+    version_filename =  filename_noext + ".version"
+    temp_filename = filename_noext + process_id + "." + extension
+
+    if not os.path.exists(version_filename):
+        with open(version_filename, 'w') as f:
+            f.write('0')
+
+    while True:
+        attempt_count = 0
+        max_attempts = MAX_UPDATE_ATTEMPTS
+
+        try:
+            # Attempt to acquire lock
+            if not os.path.exists(lock_filename):
+                # Create lock file
+                with open(lock_filename, 'w') as f:
+                    f.write(process_id)
+
+                # Small delay to ensure lock is established
+                time.sleep(SHORT_SLEEP)
+
+                # Verify we still have the lock
+                with open(lock_filename, 'r') as f:
+                    if f.read().strip() == process_id:
+                        # Lock acquired successfully
+                        break
+
+            attempt_count += 1
+            if attempt_count >= max_attempts:
+                raise Exception("Could not acquire lock after multiple attempts")
+            time.sleep(random.uniform(SHORT_SLEEP, LONG_SLEEP))
+
+        except (IOError, PermissionError):
+            time.sleep(random.uniform(SHORT_SLEEP, LONG_SLEEP))
+            continue
+
+    try:
+        # Read current version
+        with open(version_filename, 'r') as f:
+            current_version = int(f.read().strip())
+
+        # Read existing data
+        updated_data = updated_dataframe(filename, simulation)
+
+        # Write to temporary file first
+        updated_data.to_excel(temp_filename, index=False)
+
+        # Verify version hasn't changed
+        with open(version_filename, 'r') as f:
+            if int(f.read().strip()) != current_version:
+                raise Exception("Version conflict detected")
+
+        # Atomic operations
+        os.replace(temp_filename, filename)
+
+        # Increment version
+        with open(version_filename, 'w') as f:
+            f.write(str(current_version + 1))
+
+    except Exception as e:
+        # Handle errors
+        print(f"Error during update: {str(e)}")
+        # Clean up temp file if it exists
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
+        raise
+
+    finally:
+        # Release lock
+        if os.path.exists(lock_filename):
+            with open(lock_filename, 'r') as f:
+                if f.read().strip() == process_id:
+                    os.remove(lock_filename)
+
+
+def updated_dataframe(filename, simulation):
+    #Prepare the simulation output
+    record_parameters = RECORD_PARAMETERS + list(trial_parameters.keys())
+    simulation_record = {k: simulation.get(k, "n/a") for k in record_parameters}
     new_dataframe = pd.DataFrame(simulation_record, index = [0])
-    updated_dataframe = pd.concat([dataframe, new_dataframe],
-                                  ignore_index = True)
+    #Read and update the dataframe
+    # Read existing data
+    try:
+        existing_dataframe = pd.read_excel(filename)
+        updated_dataframe = pd.concat([existing_dataframe, new_dataframe],
+                                      ignore_index = True)
+    except FileNotFoundError:
+        updated_dataframe = new_dataframe
+
     updated_dataframe.reset_index()
     return updated_dataframe
 
@@ -455,19 +539,20 @@ if __name__ == "__main__":
     config_filename = args.config[0]
 
     config = read_config(config_filename)
-    
+
     mp, rp = config["model_parameters"], config["run_parameters"]
-    
+
     p_names = parameter_ordered_names(mp)
-
-    samples_df = pd.read_excel(rp["samples_input"])
-
 
     if True:
         #from microplastic.modify_seq import modify_seq
         from parzen_search import substitute_values
         # Main loop
-        for i_iter in range(samples_df.shape[0] + 1, rp["iterations"] + 1):
+        while True:
+            samples_df = pd.read_excel(rp["samples_file"])
+            i_iter = samples_df.shape[0] + 1
+            if i_iter > rp["iterations"]:
+                break
             # Fit the model and choose simulation parameters
             trial_parameters, choice_mode, uc, i_point = choose_parameters(
                                                              config,samples_df)
@@ -487,5 +572,4 @@ if __name__ == "__main__":
             # Run the simulation
             run_simulation(simulation)
             # Update the dataframe
-            samples_df = update_dataframe(samples_df, simulation)
-            samples_df.to_excel(rp["samples_output"])
+            samples_df = concurrent_update(rp["samples_file"], simulation)
