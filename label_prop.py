@@ -28,6 +28,7 @@ SHORT_SLEEP = 1.0
 LONG_SLEEP = 3.0
 RECORD_PARAMETERS = ["sample", "choice", "i_point", "step", "state",
                          "uncertainty", "dump_frame", "initial_data", "study"]
+BACKEND_PARAMS = { 'kernel' : 'rbf', 'gamma' : 20, 'max_iter' : 100000 }
 
 # Function definitions
 
@@ -117,7 +118,7 @@ def create_grid(parameters, mode = 'itertools'):
             if p_range[-1] > parameters[p_name]["max"]:
                 p_range = p_range[:-1]
             p_ranges.append(p_range)
-        points = list(itertools.product(*p_ranges))
+        points = np.array(list(itertools.product(*p_ranges)))
     return points
 
 
@@ -148,7 +149,7 @@ def create_points(parameters, samples_df, p_mode = "grid", points_file = None,
 
 
 def create_points2(parameters, samples_df, p_mode = "grid", points_file = None,
-                   return_unprobed = True):
+                   return_unprobed = True, unprobed_backend = "v1"):
     #Read parameter columns from dataframe
     p_names = parameter_ordered_names(parameters)
     transposed_points = []
@@ -157,27 +158,47 @@ def create_points2(parameters, samples_df, p_mode = "grid", points_file = None,
     points = np.transpose(transposed_points)
     labels = list(samples_df["state"])
     #Create grid
-    if p_mode == "grid":
-        points_to_check = create_grid(parameters)
-    elif p_mode == "file":
-        _, points_to_check = read_points(points_file)
-    else:
-        raise NameError(f"Unsupported point mode {p_mode}")
     #If point from grid is not in parameters, add it
     #pdb.set_trace()
     if return_unprobed:
-        for point in points_to_check:
+        if unprobed_backend == "v1":
+            if p_mode == "grid":
+                points_to_check = create_grid(parameters)
+            elif p_mode == "file":
+                _, points_to_check = read_points(points_file)
+            else:
+                raise NameError(f"Unsupported point mode {p_mode}")
+            for point in points_to_check:
             #if point not in points:
-            if not any(np.equal(points,point).all(1)):
-                #pdb.set_trace()
-                if points.shape[0] == 0:
-                    points = np.array([point])
-                    labels.append(-1)
-                else:
-                    points = np.concatenate((points, [point]))
-                    labels.append(-1)
+                if not any(np.equal(points,point).all(1)):
+                    #pdb.set_trace()
+                    if points.shape[0] == 0:
+                        points = np.array([point])
+                        labels.append(-1)
+                    else:
+                        points = np.concatenate((points, [point]))
+                        labels.append(-1)
+            #pdb.set_trace()
+            return points, labels
+        elif unprobed_backend == "v2":
+            if p_mode == "grid":
+                points_to_check = create_grid(parameters)
+            elif p_mode == "file":
+                _, points_to_check = read_points(points_file)
+            else:
+                raise NameError(f"Unsupported point mode {p_mode}")
+            #pdb.set_trace()
+            is_unchecked = ~np.all(np.isin(points_to_check, points), axis = 1)
+            unchecked_points = points_to_check[is_unchecked]
+            unchecked_labels = np.full(unchecked_points.shape[0], -1)
+            all_points = np.concatenate((points, unchecked_points), axis = 0)
+            all_labels = np.concatenate((labels, unchecked_labels), axis = 0)
+    else:
+        all_points = points
+        all_labels = labels
     #pdb.set_trace()
-    return points, labels
+    return all_points, all_labels
+
 
 def normalize_points(parameters, points):
     p_names = parameter_ordered_names(parameters)
@@ -241,12 +262,11 @@ def uncertainties(label_distributions, mode = None):
             return uncertainties_ms(label_distributions)
 
 
-def fit_model(parameters, points, labels, mode = None):
+def fit_model(parameters, points, labels, mode = None, backend_params = None):
 
     normalized_points = normalize_points(parameters, points)
 
-    label_prop = LabelSpreading(kernel = 'rbf', gamma = 20,
-                                max_iter = 100000)
+    label_prop = LabelSpreading(**backend_params)
 
     label_prop.fit(normalized_points, labels)
 
@@ -300,7 +320,7 @@ def choose_random_prefer_unprobed(points, labels):
     if len(unprobed_points) > 0:
         return random.choice(unprobed_points)
     else:
-        return random.choice(points)
+        return random.choice(list(points))
 
 
 def choose_parameters(config, samples_df):
@@ -320,7 +340,8 @@ def choose_parameters(config, samples_df):
 
     if samples_df.shape[0] > config["run_parameters"]["n_random"]:
 
-        uc_features, _, _ = fit_model(parameters, points, labels, mode = mode)
+        uc_features, _, _ = fit_model(parameters, points, labels, mode = mode,
+                                      backend_params = BACKEND_PARAMS)
 
         uc_delta = uc_features[-1][0] - uc_features[0][0]
         
@@ -364,7 +385,8 @@ def run_simulation(simulation):
         logfile_name = f"{i_iter}.{i_step}.log"
         xdata_name = f"xdata.{i_iter}.{i_step}.lammps"
         dump_name = f"atoms.{i_iter}.{i_step}.lammpsdump"
-        substitute_values(run_template, run_filename,
+        if simulation_type != "rerun":
+            substitute_values(run_template, run_filename,
                           [["INPUT", infile_name],
                            ["OUTPUT", outfile_name],
                            ["LOG", logfile_name],
@@ -372,7 +394,7 @@ def run_simulation(simulation):
                            ["DUMP", dump_name],
                            ["RANDOM", f"{random.randint(1,100000)}"],
                            ])
-        if i_step == 1:
+        if i_step == 1 and simulation_type != "rerun":
             u = prepare_sample(simulation)
             if simulation_type == "dpd":
                 u.atoms.write("system_pre.data")
@@ -386,15 +408,19 @@ def run_simulation(simulation):
                 u.atoms.write(infile_name)
             simulation["step"] = 1
         else:
-            os.system(f"cp -a {prev_outfile_name} {infile_name}")
+            if simulation_type != "rerun":
+                os.system(f"cp -a {prev_outfile_name} {infile_name}")
+            if simulation_type == "rerun":
+                get_simulation_parameters(infile_name)
             simulation["step"] += 1
-        if rp["run_mode"] == "module":
-            from lammps import lammps
-            lmp = lammps()
-            lmp.file(run_filename)
-        elif rp["run_mode"] == "standalone":
-            run_command = rp["run_command"]
-            command = f"{run_command} --input {run_filename}"
+        if simulation_type != "rerun":
+            if rp["run_mode"] == "module":
+                from lammps import lammps
+                lmp = lammps()
+                lmp.file(run_filename)
+            elif rp["run_mode"] == "standalone":
+                run_command = rp["run_command"]
+                command = f"{run_command} --input {run_filename}"
             exit_code = os.system(command)
     # Process the simulation data: determine the aggregation number
         output_exists = os.path.isfile(outfile_name)
@@ -510,8 +536,9 @@ def concurrent_update(filename, simulation):
 
 def updated_dataframe(filename, simulation):
     #Prepare the simulation output
-    record_parameters = RECORD_PARAMETERS + list(trial_parameters.keys())
-    simulation_record = {k: simulation.get(k, "n/a") for k in record_parameters}
+    simulation_record = {k: simulation.get(k, "n/a") for k in RECORD_PARAMETERS}
+    for tp in simulation["trial_parameters"]:
+        simulation_record[tp] = simulation["trial_parameters"][tp]
     new_dataframe = pd.DataFrame(simulation_record, index = [0])
     #Read and update the dataframe
     # Read existing data
